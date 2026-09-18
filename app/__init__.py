@@ -21,7 +21,17 @@ def create_app(config_name: str = None) -> Flask:
     db.init_app(app)
     migrate.init_app(app, db)
     jwt.init_app(app)
-    cors.init_app(app, resources={r"/api/*": {"origins": app.config.get("CORS_ORIGINS", "*")}})
+    cors.init_app(
+        app,
+        resources={
+            r"/*": {
+                "origins": app.config.get("CORS_ORIGINS", "*"),
+                "methods": ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+                "allow_headers": ["Content-Type", "Authorization", "X-Requested-With", "Accept"],
+                "expose_headers": ["Content-Type", "Authorization"],
+            }
+        },
+    )
 
     # Configure JWT custom error responses
     @jwt.unauthorized_loader

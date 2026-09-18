@@ -41,11 +41,11 @@ class Config:
     )
 
     # CORS Settings
-    cors_origins_env = os.getenv(
-        "CORS_ORIGINS",
-        "http://localhost:3000,http://localhost:5173,http://127.0.0.1:3000,http://127.0.0.1:5173",
-    )
-    CORS_ORIGINS = [origin.strip() for origin in cors_origins_env.split(",") if origin.strip()]
+    cors_origins_env = os.getenv("CORS_ORIGINS", "*")
+    if cors_origins_env.strip() == "*":
+        CORS_ORIGINS = "*"
+    else:
+        CORS_ORIGINS = [origin.strip().rstrip("/") for origin in cors_origins_env.split(",") if origin.strip()]
 
 
 class DevelopmentConfig(Config):
