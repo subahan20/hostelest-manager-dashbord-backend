@@ -56,4 +56,15 @@ def create_app(config_name: str = None) -> Flask:
     # Register routes
     register_routes(app)
 
+    # Automatically create tables and seed clean manager accounts if database is empty
+    with app.app_context():
+        try:
+            db.create_all()
+            from app.models.user import User
+            if not User.query.filter_by(email="manager.hitech@hostelest.com").first():
+                from init_clean_db import init_clean_database
+                init_clean_database(app)
+        except Exception as e:
+            app.logger.warning(f"Database bootstrap warning: {e}")
+
     return app
