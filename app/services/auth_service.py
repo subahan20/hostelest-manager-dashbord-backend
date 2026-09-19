@@ -17,7 +17,17 @@ class AuthService:
             (payload, error_message, status_code)
         """
         email = email.strip().lower()
-        user = User.query.filter(User.email.ilike(email)).first()
+        try:
+            user = User.query.filter(User.email.ilike(email)).first()
+        except Exception:
+            db.session.rollback()
+            try:
+                db.create_all()
+                from init_clean_db import init_clean_database
+                init_clean_database()
+                user = User.query.filter(User.email.ilike(email)).first()
+            except Exception as e:
+                return None, f"Database table initialization failed: {str(e)}", 500
 
         if not user or not user.check_password(password):
             return None, "Invalid email or password", 401
