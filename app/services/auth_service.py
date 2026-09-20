@@ -37,7 +37,7 @@ class AuthService:
             try:
                 from sqlalchemy import text
                 mgr_rows = db.session.execute(
-                    text("SELECT id, user_id, name, email, phone, password_hash, hostel_id, is_active FROM managers WHERE lower(email) = :email ORDER BY created_at DESC"),
+                    text("SELECT id, user_id, name, email, phone, password_hash, hostel_id, is_active FROM managers WHERE lower(email) = :email"),
                     {"email": email}
                 ).mappings().all()
 
@@ -65,9 +65,9 @@ class AuthService:
                         valid = True
 
                     if valid:
+                        import uuid
                         if not user:
                             # Auto-create User in users table
-                            import uuid
                             new_user_id = str(uuid.uuid4())
                             phone_val = mgr_row.get("phone")
                             if phone_val:
@@ -92,10 +92,10 @@ class AuthService:
                             user.is_active = True
                             db.session.flush()
 
-                        # Safely link manager row with user_id if not already linked
+                        # Safely link manager row with user_id
                         try:
                             db.session.execute(
-                                text("UPDATE managers SET user_id = :uid WHERE id = :mid AND (user_id IS NULL OR user_id = :uid)"),
+                                text("UPDATE managers SET user_id = :uid WHERE id = :mid"),
                                 {"uid": user.id, "mid": mgr_row["id"]}
                             )
                         except Exception:
@@ -103,25 +103,19 @@ class AuthService:
 
                         # Create ManagerHostel link if hostel_id is present
                         if mgr_row.get("hostel_id"):
-                            from app.models.manager_hostel import ManagerHostel
                             try:
-                                mh = ManagerHostel.query.filter_by(hostel_id=mgr_row["hostel_id"]).filter(
-                                    (ManagerHostel.manager_id == mgr_row["id"]) | (ManagerHostel.manager_id == user.id)
-                                ).first()
-                                if not mh:
-                                    mh = ManagerHostel(
-                                        manager_id=user.id,
-                                        hostel_id=mgr_row["hostel_id"],
-                                        status="active"
-                                    )
-                                    db.session.add(mh)
+                                mh_id = str(uuid.uuid4())
+                                db.session.execute(
+                                    text("INSERT INTO manager_hostels (id, manager_id, hostel_id, status, assigned_at, created_at, updated_at) VALUES (:id, :mid, :hid, 'active', NOW(), NOW(), NOW()) ON CONFLICT DO NOTHING"),
+                                    {"id": mh_id, "mid": mgr_row["id"], "hid": mgr_row["hostel_id"]}
+                                )
                             except Exception:
                                 pass
 
                         db.session.commit()
                         password_matched = True
                         break
-            except Exception as e:
+            except Exception:
                 db.session.rollback()
 
         if not user or not password_matched:
