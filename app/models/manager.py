@@ -47,6 +47,18 @@ class Manager(BaseModel):
             except Exception:
                 pass
 
+        if not assigned:
+            try:
+                from sqlalchemy import text
+                mgr_row = db.session.execute(
+                    text("SELECT hostel_id FROM managers WHERE id = :mid OR user_id = :uid"),
+                    {"mid": str(self.id), "uid": str(self.user_id)}
+                ).first()
+                if mgr_row and mgr_row[0]:
+                    assigned.add(str(mgr_row[0]))
+            except Exception:
+                pass
+
         return list(assigned)
 
     def has_hostel_access(self, hostel_id) -> bool:
