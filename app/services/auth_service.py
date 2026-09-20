@@ -137,11 +137,14 @@ class AuthService:
         refresh_token = create_refresh_token(identity=str(user.id), additional_claims=additional_claims)
 
         user_data = AuthService.format_user_profile(user)
+        assigned_hostels = user_data.get("assigned_hostels", [])
 
         response_data = {
             "access_token": access_token,
             "refresh_token": refresh_token,
             "user": user_data,
+            "manager": user_data.get("manager_profile"),
+            "assigned_hostels": assigned_hostels,
         }
         return response_data, None, 200
 
@@ -168,7 +171,7 @@ class AuthService:
     @staticmethod
     def get_current_user_profile(user_id: str) -> Tuple[Optional[Dict[str, Any]], Optional[str], int]:
         """
-        Fetch the current user's profile with detailed role information.
+        Fetch the current user's profile with detailed role information and assigned hostels.
         
         Returns:
             (payload, error_message, status_code)
@@ -180,13 +183,19 @@ class AuthService:
         if not user.is_active:
             return None, "Account is disabled", 403
 
-        return AuthService.format_user_profile(user), None, 200
+        user_data = AuthService.format_user_profile(user)
+        return {
+            "user": user_data,
+            "manager": user_data.get("manager_profile"),
+            "assigned_hostels": user_data.get("assigned_hostels", []),
+        }, None, 200
 
     @staticmethod
     def format_user_profile(user: User) -> Dict[str, Any]:
         """Format user model and any attached role profile into clean dictionary."""
         user_data = user.to_dict()
         role_str = str(user.role or "").lower()
+        assigned_hostels = []
 
         if role_str in ("manager", "hostel_manager"):
             manager = user.manager
@@ -203,7 +212,26 @@ class AuthService:
 
             if manager:
                 user_data["manager_profile"] = manager.to_dict(include_hostels=True)
+                hostel_ids = manager.get_assigned_hostel_ids()
+                if not hostel_ids:
+                    from sqlalchemy import text
+                    mgr_row = db.session.execute(
+                        text("SELECT hostel_id FROM managers WHERE user_id = :uid OR lower(email) = :email"),
+                        {"uid": user.id, "email": user.email.lower()}
+                    ).first()
+                    if mgr_row and mgr_row[0]:
+                        hostel_ids = [str(mgr_row[0])]
+
+                if hostel_ids:
+                    from app.models.hostel import Hostel
+                    hostel_objs = Hostel.query.filter(Hostel.id.in_(hostel_ids)).all()
+                    assigned_hostels = [h.to_dict() for h in hostel_objs]
+
         elif role_str == "owner" and user.owner:
             user_data["owner_profile"] = user.owner.to_dict()
+            from app.models.hostel import Hostel
+            hostel_objs = Hostel.query.filter_by(owner_id=user.owner.id).all()
+            assigned_hostels = [h.to_dict() for h in hostel_objs]
 
+        user_data["assigned_hostels"] = assigned_hostels
         return user_data
