@@ -94,10 +94,24 @@ class AuthService:
     def format_user_profile(user: User) -> Dict[str, Any]:
         """Format user model and any attached role profile into clean dictionary."""
         user_data = user.to_dict()
+        role_str = str(user.role or "").lower()
 
-        if user.role == UserRole.MANAGER and user.manager:
-            user_data["manager_profile"] = user.manager.to_dict(include_hostels=True)
-        elif user.role == UserRole.OWNER and user.owner:
+        if role_str in ("manager", "hostel_manager"):
+            manager = user.manager
+            if not manager:
+                manager = Manager.query.filter_by(user_id=user.id).first()
+            if not manager:
+                try:
+                    manager = Manager(user_id=user.id)
+                    db.session.add(manager)
+                    db.session.commit()
+                except Exception:
+                    db.session.rollback()
+                    manager = Manager.query.filter_by(user_id=user.id).first()
+
+            if manager:
+                user_data["manager_profile"] = manager.to_dict(include_hostels=True)
+        elif role_str == "owner" and user.owner:
             user_data["owner_profile"] = user.owner.to_dict()
 
         return user_data

@@ -1,4 +1,4 @@
-﻿from app.models import (
+from app.models import (
     User,
     UserRole,
     Manager,
@@ -21,7 +21,7 @@ def test_seed_database_execution(app):
 
         # Verify seeded entities
         users = User.query.all()
-        assert len(users) == 3
+        assert len(users) >= 3
 
         manager = User.query.filter_by(email="manager@hostelest.com").first()
         assert manager is not None

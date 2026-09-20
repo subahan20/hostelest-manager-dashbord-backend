@@ -59,13 +59,23 @@ def manager_required(fn):
         if not user.is_active:
             return error_response(message="Account is disabled", status_code=403)
 
-        if user.role != UserRole.MANAGER:
+        role_str = str(user.role or "").lower()
+        if role_str not in ("manager", "hostel_manager"):
             return error_response(
                 message="Forbidden - Manager access required",
                 status_code=403,
             )
 
         manager = Manager.query.filter_by(user_id=user.id).first()
+        if not manager:
+            try:
+                manager = Manager(user_id=user.id)
+                db.session.add(manager)
+                db.session.commit()
+            except Exception:
+                db.session.rollback()
+                manager = Manager.query.filter_by(user_id=user.id).first()
+
         if not manager:
             return error_response(
                 message="Forbidden - Manager profile not found",

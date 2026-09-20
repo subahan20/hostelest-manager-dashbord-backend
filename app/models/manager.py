@@ -30,11 +30,24 @@ class Manager(BaseModel):
 
     def get_assigned_hostel_ids(self) -> List[str]:
         """Return list of string UUIDs of actively assigned hostels."""
-        return [
-            str(mh.hostel_id)
-            for mh in self.manager_hostels
-            if mh.status == "active"
-        ]
+        assigned = set()
+        for mh in (self.manager_hostels or []):
+            if str(getattr(mh, "status", "active")).lower() == "active":
+                assigned.add(str(mh.hostel_id))
+
+        if not assigned:
+            try:
+                from app.models.manager_hostel import ManagerHostel
+                mhs = ManagerHostel.query.filter(
+                    (ManagerHostel.manager_id == self.id) | (ManagerHostel.manager_id == self.user_id)
+                ).all()
+                for mh in mhs:
+                    if str(getattr(mh, "status", "active")).lower() == "active":
+                        assigned.add(str(mh.hostel_id))
+            except Exception:
+                pass
+
+        return list(assigned)
 
     def has_hostel_access(self, hostel_id) -> bool:
         """Check if manager is actively assigned to the given hostel."""
