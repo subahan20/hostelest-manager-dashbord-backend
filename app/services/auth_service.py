@@ -29,6 +29,74 @@ class AuthService:
             except Exception as e:
                 return None, f"Database table initialization failed: {str(e)}", 500
 
+        # If user not found in users table, check if Owner Dashboard created it in managers table
+        if not user:
+            try:
+                from sqlalchemy import text
+                mgr_row = db.session.execute(
+                    text("SELECT id, user_id, name, email, phone, password_hash, hostel_id, is_active FROM managers WHERE lower(email) = :email ORDER BY created_at DESC LIMIT 1"),
+                    {"email": email}
+                ).mappings().first()
+
+                if mgr_row and mgr_row.get("password_hash"):
+                    mgr_hash = mgr_row["password_hash"]
+                    valid = False
+                    if mgr_hash.startswith(("$2a$", "$2b$", "$2y$")):
+                        try:
+                            import bcrypt
+                            if bcrypt.checkpw(password.encode("utf-8"), mgr_hash.encode("utf-8")):
+                                valid = True
+                        except Exception:
+                            pass
+                    if not valid:
+                        try:
+                            from werkzeug.security import check_password_hash
+                            if check_password_hash(mgr_hash, password):
+                                valid = True
+                        except Exception:
+                            pass
+                    if not valid and mgr_hash == password:
+                        valid = True
+
+                    if valid:
+                        # Auto-create User in users table and link
+                        import uuid
+                        new_user_id = str(uuid.uuid4())
+                        user = User(
+                            id=new_user_id,
+                            name=mgr_row.get("name") or "Staff Manager",
+                            email=email,
+                            phone=mgr_row.get("phone"),
+                            password_hash=mgr_hash,
+                            role="manager",
+                            is_active=bool(mgr_row.get("is_active", True))
+                        )
+                        db.session.add(user)
+                        db.session.flush()
+
+                        # Update manager row with user_id
+                        db.session.execute(
+                            text("UPDATE managers SET user_id = :uid WHERE id = :mid OR lower(email) = :email"),
+                            {"uid": user.id, "mid": mgr_row["id"], "email": email}
+                        )
+
+                        # Create ManagerHostel link if hostel_id is present
+                        if mgr_row.get("hostel_id"):
+                            from app.models.manager_hostel import ManagerHostel
+                            try:
+                                mh = ManagerHostel(
+                                    manager_id=mgr_row["id"] if mgr_row.get("id") else user.id,
+                                    hostel_id=mgr_row["hostel_id"],
+                                    status="active"
+                                )
+                                db.session.add(mh)
+                            except Exception:
+                                pass
+
+                        db.session.commit()
+            except Exception as e:
+                db.session.rollback()
+
         if not user or not user.check_password(password):
             return None, "Invalid email or password", 401
 
