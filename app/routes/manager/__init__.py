@@ -9,6 +9,7 @@ from app.routes.manager.maintenance import maintenance_bp
 from app.routes.manager.visitors import visitors_bp
 from app.routes.manager.notices import notices_bp
 from app.routes.manager.reports import reports_bp
+from app.routes.manager.hostels import hostels_bp
 
 manager_bp = Blueprint("manager", __name__)
 manager_bp.register_blueprint(dashboard_bp)
@@ -21,5 +22,6 @@ manager_bp.register_blueprint(maintenance_bp)
 manager_bp.register_blueprint(visitors_bp)
 manager_bp.register_blueprint(notices_bp)
 manager_bp.register_blueprint(reports_bp)
+manager_bp.register_blueprint(hostels_bp)
 
 __all__ = ["manager_bp"]
