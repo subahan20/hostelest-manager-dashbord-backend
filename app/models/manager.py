@@ -16,7 +16,7 @@ class Manager(BaseModel):
     employee_code = db.Column(db.String(50), unique=True, nullable=True, index=True)
     joining_date = db.Column(db.Date, nullable=True)
     profile_image = db.Column(db.String(255), nullable=True)
-    emergency_contact = db.Column(db.String(20), nullable=True)
+    emergency_contact = db.Column(db.String(100), nullable=True)
 
     # Relationships
     user = db.relationship("User", back_populates="manager")
