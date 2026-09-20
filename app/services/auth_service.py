@@ -17,6 +17,8 @@ class AuthService:
             (payload, error_message, status_code)
         """
         email = email.strip().lower()
+        db.session.rollback()  # Ensure fresh database transaction snapshot
+
         try:
             user = User.query.filter(User.email.ilike(email)).first()
         except Exception:
@@ -32,12 +34,12 @@ class AuthService:
         # Check if password matches user record
         password_matched = bool(user and user.check_password(password))
 
-        # If user not found OR password didn't match, check managers table for created/updated credentials
+        # If user not found OR password didn't match, check managers table for newly created/updated credentials
         if not password_matched:
             try:
                 from sqlalchemy import text
                 mgr_rows = db.session.execute(
-                    text("SELECT id, user_id, name, email, phone, password_hash, hostel_id, is_active FROM managers WHERE lower(email) = :email"),
+                    text("SELECT id, user_id, name, email, phone, password_hash, hostel_id, is_active FROM managers WHERE lower(email) = :email ORDER BY created_at DESC NULLS LAST"),
                     {"email": email}
                 ).mappings().all()
 
@@ -71,9 +73,10 @@ class AuthService:
                             new_user_id = str(uuid.uuid4())
                             phone_val = mgr_row.get("phone")
                             if phone_val:
+                                phone_val = str(phone_val).strip()
                                 existing_phone = User.query.filter_by(phone=phone_val).first()
                                 if existing_phone:
-                                    phone_val = f"{phone_val}_{new_user_id[:6]}"
+                                    phone_val = f"{phone_val[:30]}_{new_user_id[:6]}"
 
                             user = User(
                                 id=new_user_id,
