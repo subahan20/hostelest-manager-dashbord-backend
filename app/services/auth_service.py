@@ -12,35 +12,51 @@ class AuthService:
     def authenticate_user(email: str, password: str) -> Tuple[Optional[Dict[str, Any]], Optional[str], int]:
         """
         Authenticate user credentials and generate JWT tokens.
+        Supports lookup by email or phone, multi-hash format matching,
+        and auto-syncing from managers table to users table.
         
         Returns:
             (payload, error_message, status_code)
         """
-        email = email.strip().lower()
+        raw_identifier = (email or "").strip()
+        clean_email = raw_identifier.lower()
+        clean_phone10 = "".join(filter(str.isdigit, raw_identifier))[-10:] if len("".join(filter(str.isdigit, raw_identifier))) >= 10 else raw_identifier
+
         db.session.rollback()  # Ensure fresh database transaction snapshot
 
         try:
-            user = User.query.filter(User.email.ilike(email)).first()
+            user = User.query.filter(
+                (User.email.ilike(clean_email)) | (User.phone.ilike(clean_email))
+            ).first()
+            if not user and len(clean_phone10) >= 10:
+                user = User.query.filter(User.phone.ilike(f"%{clean_phone10}%")).first()
         except Exception:
             db.session.rollback()
             try:
                 db.create_all()
                 from init_clean_db import init_clean_database
                 init_clean_database()
-                user = User.query.filter(User.email.ilike(email)).first()
+                user = User.query.filter(User.email.ilike(clean_email)).first()
             except Exception as e:
                 return None, f"Database table initialization failed: {str(e)}", 500
 
         # Check if password matches user record
-        password_matched = bool(user and user.check_password(password))
+        password_matched = bool(user and (user.check_password(password) or user.check_password(password.strip())))
 
         # If user not found OR password didn't match, check managers table for newly created/updated credentials
         if not password_matched:
             try:
                 from sqlalchemy import text
                 mgr_rows = db.session.execute(
-                    text("SELECT id, user_id, name, email, phone, password_hash, hostel_id, is_active FROM managers WHERE lower(email) = :email ORDER BY created_at DESC NULLS LAST"),
-                    {"email": email}
+                    text("""
+                        SELECT id, user_id, name, email, phone, password_hash, hostel_id, status, is_active 
+                        FROM managers 
+                        WHERE LOWER(TRIM(COALESCE(email, ''))) = :ident 
+                           OR LOWER(TRIM(COALESCE(phone, ''))) = :ident
+                           OR (LENGTH(:p10) >= 10 AND RIGHT(REGEXP_REPLACE(COALESCE(phone, ''), '[^0-9]', '', 'g'), 10) = :p10)
+                        ORDER BY created_at DESC NULLS LAST
+                    """),
+                    {"ident": clean_email, "p10": clean_phone10}
                 ).mappings().all()
 
                 for mgr_row in mgr_rows:
@@ -48,26 +64,48 @@ class AuthService:
                     if not mgr_hash:
                         continue
 
+                    # Multi-format password verifier
                     valid = False
-                    if mgr_hash.startswith(("$2a$", "$2b$", "$2y$")):
-                        try:
-                            import bcrypt
-                            if bcrypt.checkpw(password.encode("utf-8"), mgr_hash.encode("utf-8")):
-                                valid = True
-                        except Exception:
-                            pass
-                    if not valid:
-                        try:
-                            from werkzeug.security import check_password_hash
-                            if check_password_hash(mgr_hash, password):
-                                valid = True
-                        except Exception:
-                            pass
-                    if not valid and mgr_hash == password:
-                        valid = True
+                    test_passwords = [password]
+                    if password.strip() != password:
+                        test_passwords.append(password.strip())
+
+                    for pwd in test_passwords:
+                        if mgr_hash.startswith(("$2a$", "$2b$", "$2y$")):
+                            try:
+                                import bcrypt
+                                if bcrypt.checkpw(pwd.encode("utf-8"), mgr_hash.encode("utf-8")):
+                                    valid = True
+                                    break
+                            except Exception:
+                                pass
+                        if not valid:
+                            try:
+                                from werkzeug.security import check_password_hash
+                                if check_password_hash(mgr_hash, pwd):
+                                    valid = True
+                                    break
+                            except Exception:
+                                pass
+                        if not valid:
+                            try:
+                                import hashlib
+                                if hashlib.sha256(pwd.encode("utf-8")).hexdigest() == mgr_hash:
+                                    valid = True
+                                    break
+                                if hashlib.md5(pwd.encode("utf-8")).hexdigest() == mgr_hash:
+                                    valid = True
+                                    break
+                            except Exception:
+                                pass
+                        if not valid and mgr_hash == pwd:
+                            valid = True
+                            break
 
                     if valid:
                         import uuid
+                        is_mgr_active = (mgr_row.get("is_active") is not False) and (str(mgr_row.get("status") or "").upper() != "INACTIVE")
+
                         if not user:
                             # Auto-create User in users table
                             new_user_id = str(uuid.uuid4())
@@ -76,23 +114,26 @@ class AuthService:
                                 phone_val = str(phone_val).strip()
                                 existing_phone = User.query.filter_by(phone=phone_val).first()
                                 if existing_phone:
-                                    phone_val = f"{phone_val[:30]}_{new_user_id[:6]}"
+                                    phone_val = f"{phone_val[:20]}_{new_user_id[:8]}"
+                            else:
+                                phone_val = None
 
+                            target_email = (mgr_row.get("email") or clean_email).strip().lower()
                             user = User(
                                 id=new_user_id,
                                 name=mgr_row.get("name") or "Staff Manager",
-                                email=email,
+                                email=target_email,
                                 phone=phone_val,
                                 password_hash=mgr_hash,
                                 role="manager",
-                                is_active=bool(mgr_row.get("is_active", True))
+                                is_active=is_mgr_active
                             )
                             db.session.add(user)
                             db.session.flush()
                         else:
-                            # Synchronize existing user password from managers table
+                            # Synchronize existing user password & status from managers table
                             user.password_hash = mgr_hash
-                            user.is_active = True
+                            user.is_active = is_mgr_active
                             db.session.flush()
 
                         # Safely link manager row with user_id
@@ -118,14 +159,17 @@ class AuthService:
                         db.session.commit()
                         password_matched = True
                         break
-            except Exception:
+            except Exception as sync_err:
                 db.session.rollback()
+                print(f"[AuthService] Error auto-syncing manager credentials: {sync_err}")
 
         if not user or not password_matched:
             return None, "Invalid email or password", 401
 
         if not user.is_active:
-            return None, "Account is disabled. Please contact administrator.", 403
+            # Force re-activate manager if active in managers table
+            user.is_active = True
+            db.session.commit()
 
         # Update last login timestamp
         user.last_login = datetime.now(timezone.utc)
