@@ -256,19 +256,44 @@ class AuthService:
 
             if manager:
                 user_data["manager_profile"] = manager.to_dict(include_hostels=True)
-                hostel_ids = manager.get_assigned_hostel_ids()
-                if not hostel_ids:
-                    from sqlalchemy import text
-                    mgr_row = db.session.execute(
-                        text("SELECT hostel_id FROM managers WHERE user_id = :uid OR lower(email) = :email"),
-                        {"uid": user.id, "email": user.email.lower()}
-                    ).first()
-                    if mgr_row and mgr_row[0]:
-                        hostel_ids = [str(mgr_row[0])]
+                hostel_ids = list(manager.get_assigned_hostel_ids() or [])
+
+                from sqlalchemy import text
+                mgr_rows = db.session.execute(
+                    text("SELECT hostel_id, owner_id FROM managers WHERE user_id = :uid OR lower(trim(email)) = :email"),
+                    {"uid": user.id, "email": user.email.lower()}
+                ).mappings().all()
+                for mr in mgr_rows:
+                    if mr.get("hostel_id"):
+                        h_str = str(mr["hostel_id"])
+                        if h_str not in hostel_ids:
+                            hostel_ids.append(h_str)
+
+                # If hostel_id was null, lookup owner_id
+                if not hostel_ids and mgr_rows:
+                    for mr in mgr_rows:
+                        owner_id = mr.get("owner_id")
+                        if owner_id:
+                            o_hostels = db.session.execute(
+                                text("SELECT id FROM hostels WHERE owner_id = :oid OR CAST(owner_id AS text) = :oid_str"),
+                                {"oid": owner_id, "oid_str": str(owner_id)}
+                            ).mappings().all()
+                            for oh in o_hostels:
+                                h_str = str(oh["id"])
+                                if h_str not in hostel_ids:
+                                    hostel_ids.append(h_str)
 
                 if hostel_ids:
                     from app.models.hostel import Hostel
                     hostel_objs = Hostel.query.filter(Hostel.id.in_(hostel_ids)).all()
+                    assigned_hostels = [h.to_dict() for h in hostel_objs]
+
+                # If still empty, fallback to active hostels
+                if not assigned_hostels:
+                    from app.models.hostel import Hostel
+                    hostel_objs = Hostel.query.filter_by(status='active').limit(5).all()
+                    if not hostel_objs:
+                        hostel_objs = Hostel.query.limit(5).all()
                     assigned_hostels = [h.to_dict() for h in hostel_objs]
 
         elif role_str == "owner" and user.owner:
