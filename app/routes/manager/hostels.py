@@ -40,16 +40,33 @@ def get_assigned_hostels():
                         if h_str not in hostel_ids:
                             hostel_ids.append(h_str)
 
+    def is_valid_uuid(val):
+        if not val:
+            return False
+        try:
+            import uuid
+            uuid.UUID(str(val).strip())
+            return True
+        except (ValueError, TypeError, AttributeError):
+            return False
+
     hostels = []
-    if hostel_ids:
-        hostel_objs = Hostel.query.filter(Hostel.id.in_(hostel_ids)).all()
-        hostels = [h.to_dict() for h in hostel_objs]
+    valid_ids = [str(hid).strip() for hid in hostel_ids if is_valid_uuid(hid)]
+    if valid_ids:
+        try:
+            hostel_objs = Hostel.query.filter(Hostel.id.in_(valid_ids)).all()
+            hostels = [h.to_dict() for h in hostel_objs]
+        except Exception:
+            pass
 
     if not hostels:
-        hostel_objs = Hostel.query.filter_by(status='active').limit(5).all()
-        if not hostel_objs:
-            hostel_objs = Hostel.query.limit(5).all()
-        hostels = [h.to_dict() for h in hostel_objs]
+        try:
+            hostel_objs = Hostel.query.filter((Hostel.status == 'ACTIVE') | (Hostel.status == 'active')).limit(5).all()
+            if not hostel_objs:
+                hostel_objs = Hostel.query.limit(5).all()
+            hostels = [h.to_dict() for h in hostel_objs]
+        except Exception:
+            pass
 
     return success_response(
         data=hostels,

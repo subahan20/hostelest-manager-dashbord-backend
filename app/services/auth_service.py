@@ -104,61 +104,95 @@ class AuthService:
 
                     if valid:
                         import uuid
+
+                        def is_valid_uuid(val):
+                            if not val:
+                                return False
+                            try:
+                                uuid.UUID(str(val).strip())
+                                return True
+                            except (ValueError, TypeError, AttributeError):
+                                return False
+
                         is_mgr_active = (mgr_row.get("is_active") is not False) and (str(mgr_row.get("status") or "").upper() != "INACTIVE")
 
-                        if not user:
-                            # Auto-create User in users table
-                            new_user_id = str(uuid.uuid4())
-                            phone_val = mgr_row.get("phone")
-                            if phone_val:
-                                phone_val = str(phone_val).strip()
-                                existing_phone = User.query.filter_by(phone=phone_val).first()
-                                if existing_phone:
-                                    phone_val = f"{phone_val[:20]}_{new_user_id[:8]}"
-                            else:
-                                phone_val = None
-
-                            target_email = (mgr_row.get("email") or clean_email).strip().lower()
-                            user = User(
-                                id=new_user_id,
-                                name=mgr_row.get("name") or "Staff Manager",
-                                email=target_email,
-                                phone=phone_val,
-                                password_hash=mgr_hash,
-                                role="manager",
-                                is_active=is_mgr_active
-                            )
-                            db.session.add(user)
-                            db.session.flush()
-                        else:
-                            # Synchronize existing user password & status from managers table
-                            user.password_hash = mgr_hash
-                            user.is_active = is_mgr_active
-                            db.session.flush()
-
-                        # Safely link manager row with user_id
                         try:
-                            db.session.execute(
-                                text("UPDATE managers SET user_id = :uid WHERE id = :mid"),
-                                {"uid": user.id, "mid": mgr_row["id"]}
-                            )
-                        except Exception:
-                            pass
+                            if not user:
+                                # Auto-create User in users table
+                                new_user_id = str(uuid.uuid4())
+                                phone_val = mgr_row.get("phone")
+                                if phone_val:
+                                    phone_val = str(phone_val).strip()
+                                    existing_phone = User.query.filter_by(phone=phone_val).first()
+                                    if existing_phone:
+                                        phone_val = f"{phone_val[:20]}_{new_user_id[:8]}"
+                                else:
+                                    phone_val = None
 
-                        # Create ManagerHostel link if hostel_id is present
-                        if mgr_row.get("hostel_id"):
+                                target_email = (mgr_row.get("email") or clean_email).strip().lower()
+                                user = User(
+                                    id=new_user_id,
+                                    name=mgr_row.get("name") or "Staff Manager",
+                                    email=target_email,
+                                    phone=phone_val,
+                                    password_hash=mgr_hash,
+                                    role="manager",
+                                    is_active=is_mgr_active
+                                )
+                                db.session.add(user)
+                                db.session.flush()
+                            else:
+                                # Synchronize existing user password & status from managers table
+                                user.password_hash = mgr_hash
+                                user.is_active = is_mgr_active
+                                db.session.flush()
+
+                            # Safely link manager row with user_id
                             try:
-                                mh_id = str(uuid.uuid4())
                                 db.session.execute(
-                                    text("INSERT INTO manager_hostels (id, manager_id, hostel_id, status, assigned_at, created_at, updated_at) VALUES (:id, :mid, :hid, 'active', NOW(), NOW(), NOW()) ON CONFLICT DO NOTHING"),
-                                    {"id": mh_id, "mid": mgr_row["id"], "hid": mgr_row["hostel_id"]}
+                                    text("UPDATE managers SET user_id = :uid WHERE id = :mid"),
+                                    {"uid": user.id, "mid": mgr_row["id"]}
                                 )
                             except Exception:
                                 pass
 
-                        db.session.commit()
-                        password_matched = True
-                        break
+                            # Create ManagerHostel link ONLY if hostel_id is a valid UUID
+                            raw_hid = mgr_row.get("hostel_id")
+                            if raw_hid and is_valid_uuid(raw_hid) and is_valid_uuid(mgr_row["id"]):
+                                try:
+                                    mh_id = str(uuid.uuid4())
+                                    db.session.execute(
+                                        text("INSERT INTO manager_hostels (id, manager_id, hostel_id, status, assigned_at, created_at, updated_at) VALUES (:id, :mid, :hid, 'active', NOW(), NOW(), NOW()) ON CONFLICT DO NOTHING"),
+                                        {"id": mh_id, "mid": mgr_row["id"], "hid": str(raw_hid).strip()}
+                                    )
+                                except Exception:
+                                    pass
+
+                            db.session.commit()
+                            password_matched = True
+                            break
+                        except Exception as inner_err:
+                            db.session.rollback()
+                            print(f"[AuthService] Inner error during user creation: {inner_err}")
+                            # Retry basic user creation if phone or attribute had conflict
+                            try:
+                                new_user_id = str(uuid.uuid4())
+                                target_email = (mgr_row.get("email") or clean_email).strip().lower()
+                                user = User(
+                                    id=new_user_id,
+                                    name=mgr_row.get("name") or "Staff Manager",
+                                    email=target_email,
+                                    phone=f"{new_user_id[:10]}",
+                                    password_hash=mgr_hash,
+                                    role="manager",
+                                    is_active=True
+                                )
+                                db.session.add(user)
+                                db.session.commit()
+                                password_matched = True
+                                break
+                            except Exception:
+                                db.session.rollback()
             except Exception as sync_err:
                 db.session.rollback()
                 print(f"[AuthService] Error auto-syncing manager credentials: {sync_err}")
@@ -283,18 +317,35 @@ class AuthService:
                                 if h_str not in hostel_ids:
                                     hostel_ids.append(h_str)
 
-                if hostel_ids:
+                def is_valid_uuid(val):
+                    if not val:
+                        return False
+                    try:
+                        import uuid
+                        uuid.UUID(str(val).strip())
+                        return True
+                    except (ValueError, TypeError, AttributeError):
+                        return False
+
+                valid_hostel_ids = [str(hid).strip() for hid in hostel_ids if is_valid_uuid(hid)]
+                if valid_hostel_ids:
                     from app.models.hostel import Hostel
-                    hostel_objs = Hostel.query.filter(Hostel.id.in_(hostel_ids)).all()
-                    assigned_hostels = [h.to_dict() for h in hostel_objs]
+                    try:
+                        hostel_objs = Hostel.query.filter(Hostel.id.in_(valid_hostel_ids)).all()
+                        assigned_hostels = [h.to_dict() for h in hostel_objs]
+                    except Exception:
+                        pass
 
                 # If still empty, fallback to active hostels
                 if not assigned_hostels:
                     from app.models.hostel import Hostel
-                    hostel_objs = Hostel.query.filter_by(status='active').limit(5).all()
-                    if not hostel_objs:
-                        hostel_objs = Hostel.query.limit(5).all()
-                    assigned_hostels = [h.to_dict() for h in hostel_objs]
+                    try:
+                        hostel_objs = Hostel.query.filter((Hostel.status == 'ACTIVE') | (Hostel.status == 'active')).limit(5).all()
+                        if not hostel_objs:
+                            hostel_objs = Hostel.query.limit(5).all()
+                        assigned_hostels = [h.to_dict() for h in hostel_objs]
+                    except Exception:
+                        pass
 
         elif role_str == "owner" and user.owner:
             user_data["owner_profile"] = user.owner.to_dict()
