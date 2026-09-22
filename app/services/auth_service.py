@@ -116,16 +116,16 @@ class AuthService:
 
                         is_mgr_active = (mgr_row.get("is_active") is not False) and (str(mgr_row.get("status") or "").upper() != "INACTIVE")
 
+                        # Step 1: Create or update User record and commit immediately
                         try:
                             if not user:
-                                # Auto-create User in users table
                                 new_user_id = str(uuid.uuid4())
                                 phone_val = mgr_row.get("phone")
                                 if phone_val:
                                     phone_val = str(phone_val).strip()
                                     existing_phone = User.query.filter_by(phone=phone_val).first()
                                     if existing_phone:
-                                        phone_val = f"{phone_val[:20]}_{new_user_id[:8]}"
+                                        phone_val = f"{phone_val[:15]}_{new_user_id[:8]}"
                                 else:
                                     phone_val = None
 
@@ -140,41 +140,15 @@ class AuthService:
                                     is_active=is_mgr_active
                                 )
                                 db.session.add(user)
-                                db.session.flush()
                             else:
-                                # Synchronize existing user password & status from managers table
                                 user.password_hash = mgr_hash
                                 user.is_active = is_mgr_active
-                                db.session.flush()
-
-                            # Safely link manager row with user_id
-                            try:
-                                db.session.execute(
-                                    text("UPDATE managers SET user_id = :uid WHERE id = :mid"),
-                                    {"uid": user.id, "mid": mgr_row["id"]}
-                                )
-                            except Exception:
-                                pass
-
-                            # Create ManagerHostel link ONLY if hostel_id is a valid UUID
-                            raw_hid = mgr_row.get("hostel_id")
-                            if raw_hid and is_valid_uuid(raw_hid) and is_valid_uuid(mgr_row["id"]):
-                                try:
-                                    mh_id = str(uuid.uuid4())
-                                    db.session.execute(
-                                        text("INSERT INTO manager_hostels (id, manager_id, hostel_id, status, assigned_at, created_at, updated_at) VALUES (:id, :mid, :hid, 'active', NOW(), NOW(), NOW()) ON CONFLICT DO NOTHING"),
-                                        {"id": mh_id, "mid": mgr_row["id"], "hid": str(raw_hid).strip()}
-                                    )
-                                except Exception:
-                                    pass
 
                             db.session.commit()
                             password_matched = True
-                            break
-                        except Exception as inner_err:
+                        except Exception as user_create_err:
                             db.session.rollback()
-                            print(f"[AuthService] Inner error during user creation: {inner_err}")
-                            # Retry basic user creation if phone or attribute had conflict
+                            print(f"[AuthService] User commit retry: {user_create_err}")
                             try:
                                 new_user_id = str(uuid.uuid4())
                                 target_email = (mgr_row.get("email") or clean_email).strip().lower()
@@ -182,7 +156,7 @@ class AuthService:
                                     id=new_user_id,
                                     name=mgr_row.get("name") or "Staff Manager",
                                     email=target_email,
-                                    phone=f"{new_user_id[:10]}",
+                                    phone=f"usr_{new_user_id[:12]}",
                                     password_hash=mgr_hash,
                                     role="manager",
                                     is_active=True
@@ -190,9 +164,40 @@ class AuthService:
                                 db.session.add(user)
                                 db.session.commit()
                                 password_matched = True
-                                break
+                            except Exception as retry_err:
+                                db.session.rollback()
+                                print(f"[AuthService] User retry failed: {retry_err}")
+
+                        if password_matched and user:
+                            # Step 2: Safely link manager row with user_id in separate transaction
+                            try:
+                                db.session.execute(
+                                    text("UPDATE managers SET user_id = :uid WHERE id = :mid"),
+                                    {"uid": str(user.id), "mid": str(mgr_row["id"])}
+                                )
+                                db.session.commit()
                             except Exception:
                                 db.session.rollback()
+
+                            # Step 3: Safely link manager_hostels ONLY if hostel_id exists in hostels table
+                            try:
+                                raw_hid = mgr_row.get("hostel_id")
+                                if raw_hid and is_valid_uuid(raw_hid) and is_valid_uuid(mgr_row["id"]):
+                                    h_exists = db.session.execute(
+                                        text("SELECT 1 FROM hostels WHERE id = :hid"),
+                                        {"hid": str(raw_hid).strip()}
+                                    ).first()
+                                    if h_exists:
+                                        mh_id = str(uuid.uuid4())
+                                        db.session.execute(
+                                            text("INSERT INTO manager_hostels (id, manager_id, hostel_id, status, assigned_at, created_at, updated_at) VALUES (:id, :mid, :hid, 'active', NOW(), NOW(), NOW()) ON CONFLICT DO NOTHING"),
+                                            {"id": mh_id, "mid": str(mgr_row["id"]), "hid": str(raw_hid).strip()}
+                                        )
+                                        db.session.commit()
+                            except Exception:
+                                db.session.rollback()
+
+                            break
             except Exception as sync_err:
                 db.session.rollback()
                 print(f"[AuthService] Error auto-syncing manager credentials: {sync_err}")
