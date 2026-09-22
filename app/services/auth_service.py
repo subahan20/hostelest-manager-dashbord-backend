@@ -20,7 +20,8 @@ class AuthService:
         """
         raw_identifier = (email or "").strip()
         clean_email = raw_identifier.lower()
-        clean_phone10 = "".join(filter(str.isdigit, raw_identifier))[-10:] if len("".join(filter(str.isdigit, raw_identifier))) >= 10 else raw_identifier
+        digits_only = "".join(filter(str.isdigit, raw_identifier))
+        clean_phone10 = digits_only[-10:] if len(digits_only) >= 10 else ""
 
         db.session.rollback()  # Ensure fresh database transaction snapshot
 
@@ -28,7 +29,7 @@ class AuthService:
             user = User.query.filter(
                 (User.email.ilike(clean_email)) | (User.phone.ilike(clean_email))
             ).first()
-            if not user and len(clean_phone10) >= 10:
+            if not user and clean_phone10:
                 user = User.query.filter(User.phone.ilike(f"%{clean_phone10}%")).first()
         except Exception:
             db.session.rollback()
@@ -53,7 +54,7 @@ class AuthService:
                         FROM managers 
                         WHERE LOWER(TRIM(COALESCE(email, ''))) = :ident 
                            OR LOWER(TRIM(COALESCE(phone, ''))) = :ident
-                           OR (LENGTH(:p10) >= 10 AND RIGHT(REGEXP_REPLACE(COALESCE(phone, ''), '[^0-9]', '', 'g'), 10) = :p10)
+                           OR (:p10 != '' AND RIGHT(REGEXP_REPLACE(COALESCE(phone, ''), '[^0-9]', '', 'g'), 10) = :p10)
                         ORDER BY created_at DESC NULLS LAST
                     """),
                     {"ident": clean_email, "p10": clean_phone10}
