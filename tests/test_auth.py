@@ -261,3 +261,57 @@ def test_manager_creation_and_login_flow(client, session):
     assert "refresh_token" in res_data["data"]
     assert res_data["data"]["user"]["email"] == "fresh_manager@hostelest.com"
     assert res_data["data"]["user"]["role"] == "manager"
+
+
+def test_login_email_normalization(client, session):
+    """Test login with uppercase email and leading/trailing whitespace."""
+    user = User(
+        name="Normalized Manager",
+        email="norm_manager@hostelest.com",
+        role=UserRole.MANAGER,
+        is_active=True
+    )
+    user.set_password("NormPass12345!")
+    session.add(user)
+    session.commit()
+
+    manager = Manager(user_id=user.id, email=user.email)
+    session.add(manager)
+    session.commit()
+
+    # Uppercase and whitespace in request
+    resp = client.post(
+        "/api/auth/login",
+        json={"email": "   NORM_MANAGER@hostelest.com   ", "password": "NormPass12345!"}
+    )
+    assert resp.status_code == 200
+    res_data = resp.get_json()
+    assert res_data["success"] is True
+    assert res_data["data"]["user"]["email"] == "norm_manager@hostelest.com"
+
+
+def test_duplicate_user_email_prevention(session):
+    """Test that duplicate email cannot create another user in database."""
+    import pytest
+    from sqlalchemy.exc import IntegrityError
+
+    u1 = User(
+        name="User One",
+        email="unique_check@hostelest.com",
+        role=UserRole.MANAGER
+    )
+    u1.set_password("Pass123!")
+    session.add(u1)
+    session.commit()
+
+    u2 = User(
+        name="User Two",
+        email="unique_check@hostelest.com",
+        role=UserRole.MANAGER
+    )
+    u2.set_password("Pass456!")
+    session.add(u2)
+    with pytest.raises(IntegrityError):
+        session.commit()
+    session.rollback()
+
