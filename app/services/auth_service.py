@@ -207,9 +207,7 @@ class AuthService:
             return None, "Invalid email or password", 401
 
         if not user.is_active:
-            # Force re-activate manager if active in managers table
-            user.is_active = True
-            db.session.commit()
+            return None, "Account is disabled. Please contact administrator.", 403
 
         # Update last login timestamp
         user.last_login = datetime.now(timezone.utc)
@@ -269,6 +267,7 @@ class AuthService:
 
         user_data = AuthService.format_user_profile(user)
         return {
+            **user_data,
             "user": user_data,
             "manager": user_data.get("manager_profile"),
             "assigned_hostels": user_data.get("assigned_hostels", []),
@@ -300,8 +299,8 @@ class AuthService:
 
                 from sqlalchemy import text
                 mgr_rows = db.session.execute(
-                    text("SELECT hostel_id, owner_id FROM managers WHERE user_id = :uid OR lower(trim(email)) = :email"),
-                    {"uid": user.id, "email": user.email.lower()}
+                    text("SELECT hostel_id, owner_id FROM managers WHERE user_id = :uid OR lower(trim(COALESCE(email, ''))) = :email"),
+                    {"uid": str(user.id), "email": str(user.email or "").lower()}
                 ).mappings().all()
                 for mr in mgr_rows:
                     if mr.get("hostel_id"):

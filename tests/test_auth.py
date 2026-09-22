@@ -189,3 +189,75 @@ def test_logout_endpoint(client, session):
     )
     assert logout_resp.status_code == 200
     assert logout_resp.get_json()["success"] is True
+
+
+def test_user_password_hashing_and_verification():
+    """Verify password hashing using Werkzeug check_password_hash."""
+    user = User(
+        name="Security Test",
+        email="security@hostelest.com",
+        role=UserRole.MANAGER,
+    )
+    user.set_password("SecurePassword@2026")
+    
+    assert user.password_hash != "SecurePassword@2026"
+    assert user.check_password("SecurePassword@2026") is True
+    assert user.check_password("WrongPassword") is False
+    assert user.check_password("") is False
+
+
+def test_manager_creation_and_login_flow(client, session):
+    """
+    Test complete flow:
+    Manager creation -> User creation -> Password hashing -> Database commit -> Login -> JWT generation
+    """
+    correct_password = "SecretManagerPass!789"
+    wrong_password = "IncorrectPassword"
+
+    user = User(
+        name="Fresh Manager",
+        email="fresh_manager@hostelest.com",
+        phone="+919123456780",
+        role="manager",
+        is_active=True
+    )
+    user.set_password(correct_password)
+    session.add(user)
+    session.commit()
+
+    manager = Manager(
+        user_id=user.id,
+        name="Fresh Manager",
+        email="fresh_manager@hostelest.com",
+        phone="+919123456780",
+        employee_code="EMP-FRESH-01",
+        status="ACTIVE",
+        is_active=True
+    )
+    session.add(manager)
+    session.commit()
+
+    # Step 1: Check password verification directly on user model
+    assert user.check_password(correct_password) is True
+    assert user.check_password(wrong_password) is False
+
+    # Step 2: Login with wrong password returns 401
+    wrong_resp = client.post(
+        "/api/auth/login",
+        json={"email": "fresh_manager@hostelest.com", "password": wrong_password}
+    )
+    assert wrong_resp.status_code == 401
+    assert wrong_resp.get_json()["success"] is False
+
+    # Step 3: Login with correct password returns 200 + tokens
+    success_resp = client.post(
+        "/api/auth/login",
+        json={"email": "fresh_manager@hostelest.com", "password": correct_password}
+    )
+    assert success_resp.status_code == 200
+    res_data = success_resp.get_json()
+    assert res_data["success"] is True
+    assert "access_token" in res_data["data"]
+    assert "refresh_token" in res_data["data"]
+    assert res_data["data"]["user"]["email"] == "fresh_manager@hostelest.com"
+    assert res_data["data"]["user"]["role"] == "manager"

@@ -10,9 +10,18 @@ class Manager(BaseModel):
         GUID(),
         db.ForeignKey("users.id", ondelete="CASCADE"),
         unique=True,
-        nullable=False,
+        nullable=True,
         index=True,
     )
+    name = db.Column(db.String(100), nullable=True)
+    email = db.Column(db.String(150), nullable=True, index=True)
+    phone = db.Column(db.String(100), nullable=True)
+    password_hash = db.Column(db.String(255), nullable=True)
+    role = db.Column(db.String(50), nullable=True, default="manager")
+    owner_id = db.Column(db.String(100), nullable=True)
+    hostel_id = db.Column(db.String(100), nullable=True)
+    status = db.Column(db.String(50), nullable=True, default="active")
+    is_active = db.Column(db.Boolean, default=True, nullable=True)
     employee_code = db.Column(db.String(50), unique=True, nullable=True, index=True)
     joining_date = db.Column(db.Date, nullable=True)
     profile_image = db.Column(db.String(255), nullable=True)
