@@ -48,17 +48,46 @@ class AuthService:
         if not password_matched:
             try:
                 from sqlalchemy import text
+                # Portable lookup first (works on SQLite tests and Postgres).
+                # Avoid Postgres-only REGEXP_REPLACE/RIGHT/NULLS LAST in the primary path so a
+                # SQL dialect error cannot wipe out the entire credential sync fallback.
                 mgr_rows = db.session.execute(
                     text("""
-                        SELECT id, user_id, name, email, phone, password_hash, hostel_id, status, is_active 
-                        FROM managers 
-                        WHERE LOWER(TRIM(COALESCE(email, ''))) = :ident 
+                        SELECT id, user_id, name, email, phone, password_hash, hostel_id, status, is_active
+                        FROM managers
+                        WHERE LOWER(TRIM(COALESCE(email, ''))) = :ident
                            OR LOWER(TRIM(COALESCE(phone, ''))) = :ident
-                           OR (:p10 != '' AND RIGHT(REGEXP_REPLACE(COALESCE(phone, ''), '[^0-9]', '', 'g'), 10) = :p10)
-                        ORDER BY created_at DESC NULLS LAST
+                        ORDER BY created_at DESC
                     """),
-                    {"ident": clean_email, "p10": clean_phone10}
+                    {"ident": clean_email},
                 ).mappings().all()
+
+                if not mgr_rows and clean_phone10:
+                    try:
+                        mgr_rows = db.session.execute(
+                            text("""
+                                SELECT id, user_id, name, email, phone, password_hash, hostel_id, status, is_active
+                                FROM managers
+                                WHERE (:p10 != '' AND RIGHT(REGEXP_REPLACE(COALESCE(phone, ''), '[^0-9]', '', 'g'), 10) = :p10)
+                                ORDER BY created_at DESC NULLS LAST
+                            """),
+                            {"p10": clean_phone10},
+                        ).mappings().all()
+                    except Exception:
+                        db.session.rollback()
+                        # SQLite / non-Postgres: scan phones in Python
+                        all_mgrs = db.session.execute(
+                            text("""
+                                SELECT id, user_id, name, email, phone, password_hash, hostel_id, status, is_active
+                                FROM managers
+                                WHERE phone IS NOT NULL
+                            """)
+                        ).mappings().all()
+                        mgr_rows = []
+                        for row in all_mgrs:
+                            digits = "".join(ch for ch in str(row.get("phone") or "") if ch.isdigit())
+                            if digits.endswith(clean_phone10):
+                                mgr_rows.append(row)
 
                 for mgr_row in mgr_rows:
                     mgr_hash = mgr_row.get("password_hash")

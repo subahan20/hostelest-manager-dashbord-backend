@@ -315,3 +315,136 @@ def test_duplicate_user_email_prevention(session):
         session.commit()
     session.rollback()
 
+
+def test_owner_style_bcrypt_manager_login(client, session):
+    """
+    Reproduce the production bug path:
+    Owner Dashboard hashes passwords with bcrypt and writes users + managers.
+    Manager Dashboard must accept the same email/password immediately.
+    """
+    import bcrypt
+
+    email = "manager@test.com"
+    password = "Test@12345"
+    wrong_password = "WrongPassword"
+
+    pwd_hash = bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
+
+    user = User(
+        name="Owner Created Manager",
+        email=email,
+        phone="+919988776655",
+        role="manager",
+        is_active=True,
+        password_hash=pwd_hash,
+    )
+    session.add(user)
+    session.flush()
+
+    manager = Manager(
+        user_id=user.id,
+        name=user.name,
+        email=email,
+        phone=user.phone,
+        password_hash=pwd_hash,
+        status="ACTIVE",
+        is_active=True,
+    )
+    session.add(manager)
+    session.commit()
+
+    assert user.check_password(password) is True
+    assert user.check_password(wrong_password) is False
+
+    ok = client.post("/api/auth/login", json={"email": email, "password": password})
+    assert ok.status_code == 200
+    body = ok.get_json()
+    assert body["success"] is True
+    assert body["data"]["access_token"]
+    assert body["data"]["user"]["role"] == "manager"
+
+    # whitespace / case normalization
+    norm = client.post(
+        "/api/auth/login",
+        json={"email": "  MANAGER@TEST.COM  ", "password": password},
+    )
+    assert norm.status_code == 200
+
+    bad = client.post("/api/auth/login", json={"email": email, "password": wrong_password})
+    assert bad.status_code == 401
+    assert bad.get_json()["success"] is False
+
+
+def test_managers_table_password_hash_sync_login(client, session):
+    """
+    When only the managers row has credentials (no users row yet),
+    login must verify managers.password_hash and sync a User.
+    This is the fallback Manager Dashboard uses for owner-created accounts.
+    """
+    import bcrypt
+    import uuid
+    from sqlalchemy import text
+
+    email = "sync_manager@test.com"
+    password = "Test@12345"
+    pwd_hash = bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
+
+    session.execute(
+        text(
+            """
+            INSERT INTO managers (
+                id, user_id, name, email, phone, password_hash,
+                role, status, is_active, created_at, updated_at
+            ) VALUES (
+                :id, NULL, :name, :email, :phone, :pwd_hash,
+                'manager', 'ACTIVE', 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+            )
+            """
+        ),
+        {
+            "id": str(uuid.uuid4()),
+            "name": "Sync Manager",
+            "email": email,
+            "phone": "+919900112233",
+            "pwd_hash": pwd_hash,
+        },
+    )
+    session.commit()
+
+    assert User.query.filter_by(email=email).first() is None
+
+    ok = client.post("/api/auth/login", json={"email": email, "password": password})
+    assert ok.status_code == 200
+    body = ok.get_json()
+    assert body["success"] is True
+    assert body["data"]["access_token"]
+    assert body["data"]["user"]["email"] == email
+    assert body["data"]["user"]["role"] == "manager"
+
+    synced = User.query.filter_by(email=email).first()
+    assert synced is not None
+    assert synced.check_password(password) is True
+
+    bad = client.post("/api/auth/login", json={"email": email, "password": "WrongPassword"})
+    assert bad.status_code == 401
+
+
+def test_inactive_manager_cannot_login(client, session):
+    """Inactive manager accounts must be rejected after password verification."""
+    user = User(
+        name="Inactive Mgr",
+        email="inactive_mgr@test.com",
+        role=UserRole.MANAGER,
+        is_active=False,
+    )
+    user.set_password("Test@12345")
+    session.add(user)
+    session.commit()
+
+    resp = client.post(
+        "/api/auth/login",
+        json={"email": "inactive_mgr@test.com", "password": "Test@12345"},
+    )
+    assert resp.status_code == 403
+    assert resp.get_json()["success"] is False
+

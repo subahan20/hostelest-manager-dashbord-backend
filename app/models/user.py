@@ -63,11 +63,14 @@ class User(BaseModel):
                     pass
 
             # 2. Try werkzeug (scrypt, pbkdf2, etc.)
-            try:
-                if check_password_hash(self.password_hash, pwd):
-                    return True
-            except Exception:
-                pass
+            # Skip werkzeug for bcrypt hashes — check_password_hash raises ValueError
+            # on "$2b$..." ("Invalid hash method") and must not be treated as auth success.
+            if not self.password_hash.startswith(("$2a$", "$2b$", "$2y$")):
+                try:
+                    if check_password_hash(self.password_hash, pwd):
+                        return True
+                except Exception:
+                    pass
 
             # 3. Fallback bcrypt attempt
             try:
