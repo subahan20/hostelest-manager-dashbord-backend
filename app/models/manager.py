@@ -97,14 +97,15 @@ class Manager(BaseModel):
         assigned_ids = self.get_assigned_hostel_ids()
         if hostel_id_str in assigned_ids:
             return True
-        # Safety fallback: if hostel exists and is active, grant manager operational access
-        try:
-            from app.models.hostel import Hostel
-            h = db.session.get(Hostel, hostel_id_str)
-            if h and (str(h.status).upper() == "ACTIVE" or h.status is None):
-                return True
-        except Exception:
-            pass
+        # Safety fallback: only if manager has NO assigned hostels at all, check if hostel exists and is active
+        if not assigned_ids:
+            try:
+                from app.models.hostel import Hostel
+                h = db.session.get(Hostel, hostel_id_str)
+                if h and (str(h.status).upper() == "ACTIVE" or h.status is None):
+                    return True
+            except Exception:
+                pass
         return False
 
     def to_dict(self, include_user: bool = False, include_hostels: bool = False) -> dict:

@@ -187,3 +187,43 @@ def test_update_room_and_status(app, client, session):
     )
     assert res_status.status_code == 200
     assert res_status.get_json()["data"]["status"] == "maintenance"
+
+
+def test_create_and_update_room_with_rent_amount(app, client, session):
+    data = setup_room_test_data(session)
+    mgr_user = data["manager_user"]
+    hostel_assigned = data["hostel_assigned"]
+
+    with app.app_context():
+        token = create_access_token(identity=str(mgr_user.id), additional_claims={"role": mgr_user.role})
+
+    # Create room sending rent_amount instead of rent
+    payload = {
+        "hostel_id": f"  {hostel_assigned.id}  ",
+        "room_number": " 401 ",
+        "floor": 4,
+        "room_type": "ac_double",
+        "capacity": 2,
+        "rent_amount": 8000.0,
+        "status": "available",
+    }
+    res_create = client.post("/api/manager/rooms", json=payload, headers={"Authorization": f"Bearer {token}"})
+    assert res_create.status_code == 201
+    room_data = res_create.get_json()["data"]
+    assert room_data["room_number"] == "401"
+    assert room_data["rent"] == 8000.0
+    assert room_data["rent_amount"] == 8000.0
+    assert room_data["hostel"]["name"] == "Assigned Hostel"
+
+    # Update room sending rent_amount instead of rent
+    room_id = room_data["id"]
+    res_update = client.put(
+        f"/api/manager/rooms/{room_id}",
+        json={"rent_amount": 8500.0, "capacity": 2},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert res_update.status_code == 200
+    updated_data = res_update.get_json()["data"]
+    assert updated_data["rent"] == 8500.0
+    assert updated_data["rent_amount"] == 8500.0
+

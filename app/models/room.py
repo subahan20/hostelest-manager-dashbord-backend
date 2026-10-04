@@ -86,6 +86,7 @@ class Room(BaseModel):
         return max(0, self.capacity - self.current_occupancy)
 
     def to_dict(self, include_occupancy: bool = True) -> dict:
+        rent_val = float(self.rent) if self.rent is not None else 0.0
         data = {
             "id": str(self.id),
             "hostel_id": str(self.hostel_id),
@@ -93,11 +94,19 @@ class Room(BaseModel):
             "floor": self.floor,
             "room_type": self.room_type,
             "capacity": self.capacity,
-            "rent": float(self.rent) if self.rent is not None else 0.0,
+            "rent": rent_val,
+            "rent_amount": rent_val,
             "status": self.status,
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,
         }
+        if self.hostel:
+            data["hostel"] = {
+                "id": str(self.hostel.id),
+                "name": self.hostel.name,
+                "area": getattr(self.hostel, "area", None),
+                "city": getattr(self.hostel, "city", None),
+            }
         if include_occupancy:
             data["current_occupancy"] = self.current_occupancy
             data["available_beds"] = self.available_beds

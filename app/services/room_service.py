@@ -76,13 +76,17 @@ class RoomService:
         if existing:
             return None, f"Room '{data['room_number']}' already exists in this hostel.", 409
 
+        rent_val = data.get("rent")
+        if rent_val is None:
+            rent_val = data.get("rent_amount", 0.0)
+
         room = Room(
             hostel_id=hostel_id,
             room_number=data["room_number"].strip(),
             floor=data.get("floor", 1),
             room_type=data.get("room_type", "double"),
             capacity=data.get("capacity", 2),
-            rent=data["rent"],
+            rent=rent_val,
             status=data.get("status", RoomStatus.AVAILABLE),
         )
         db.session.add(room)
@@ -119,6 +123,8 @@ class RoomService:
             room.capacity = data["capacity"]
         if "rent" in data:
             room.rent = data["rent"]
+        elif "rent_amount" in data:
+            room.rent = data["rent_amount"]
         if "status" in data:
             room.status = data["status"]
 
