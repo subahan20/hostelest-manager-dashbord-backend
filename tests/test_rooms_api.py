@@ -189,6 +189,33 @@ def test_update_room_and_status(app, client, session):
     assert res_status.get_json()["data"]["status"] == "maintenance"
 
 
+def test_create_room_integer_hostel_id_and_blank_rent_string(app, client, session):
+    """Regression: numeric hostel ids and rent_amount-only payloads must not 422."""
+    data = setup_room_test_data(session)
+    mgr_user = data["manager_user"]
+    hostel_assigned = data["hostel_assigned"]
+
+    with app.app_context():
+        token = create_access_token(identity=str(mgr_user.id), additional_claims={"role": mgr_user.role})
+
+    payload = {
+        "hostel_id": str(hostel_assigned.id),
+        "room_number": "501",
+        "floor": "2",
+        "capacity": "2",
+        "room_type": "AC_DOUBLE",
+        "rent": "",
+        "rent_amount": 7500,
+        "status": "AVAILABLE",
+    }
+    res = client.post("/api/manager/rooms", json=payload, headers={"Authorization": f"Bearer {token}"})
+    assert res.status_code == 201, res.get_json()
+    body = res.get_json()["data"]
+    assert body["room_number"] == "501"
+    assert body["room_type"] == "ac_double"
+    assert body["rent"] == 7500.0
+
+
 def test_create_and_update_room_with_rent_amount(app, client, session):
     data = setup_room_test_data(session)
     mgr_user = data["manager_user"]
