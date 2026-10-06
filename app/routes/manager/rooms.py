@@ -61,9 +61,25 @@ def create_room():
         return error_response(message="Request body must be JSON", status_code=400)
 
     try:
-        data = create_room_schema.load(request.get_json())
+        raw = request.get_json(silent=True) or {}
+        data = create_room_schema.load(raw)
     except ValidationError as err:
-        return error_response(message="Validation error", status_code=422, errors=err.messages)
+        # Flatten field errors into message so UI toasts are actionable
+        # even when the frontend only displays `message`.
+        parts = []
+        for field, msgs in (err.messages or {}).items():
+            if isinstance(msgs, (list, tuple)):
+                parts.append(f"{field}: {', '.join(str(m) for m in msgs)}")
+            elif isinstance(msgs, dict):
+                parts.append(f"{field}: {msgs}")
+            else:
+                parts.append(f"{field}: {msgs}")
+        detail = " | ".join(parts) if parts else "Invalid room payload"
+        return error_response(
+            message=f"Validation error: {detail}",
+            status_code=422,
+            errors=err.messages,
+        )
 
     room, err_msg, status_code = RoomService.create_room(g.current_manager, data)
     if err_msg:
