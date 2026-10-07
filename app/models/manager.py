@@ -39,10 +39,14 @@ class Manager(BaseModel):
 
     def get_assigned_hostel_ids(self) -> List[str]:
         """Return list of string UUIDs of actively assigned hostels."""
+        from app.utils.ids import filter_valid_uuid_strs, is_valid_uuid
+
         assigned = set()
         for mh in (self.manager_hostels or []):
             if str(getattr(mh, "status", "active")).lower() == "active":
-                assigned.add(str(mh.hostel_id))
+                hid = str(mh.hostel_id)
+                if is_valid_uuid(hid):
+                    assigned.add(hid)
 
         if not assigned:
             try:
@@ -52,7 +56,9 @@ class Manager(BaseModel):
                 ).all()
                 for mh in mhs:
                     if str(getattr(mh, "status", "active")).lower() == "active":
-                        assigned.add(str(mh.hostel_id))
+                        hid = str(mh.hostel_id)
+                        if is_valid_uuid(hid):
+                            assigned.add(hid)
             except Exception:
                 pass
 
@@ -63,8 +69,8 @@ class Manager(BaseModel):
                 {"mid": str(self.id), "uid": str(self.user_id)}
             ).mappings().all()
             for mr in mgr_rows:
-                if mr.get("hostel_id"):
-                    assigned.add(str(mr["hostel_id"]))
+                if mr.get("hostel_id") and is_valid_uuid(mr["hostel_id"]):
+                    assigned.add(str(mr["hostel_id"]).strip())
                 owner_id = mr.get("owner_id")
                 if owner_id:
                     o_hostels = db.session.execute(
@@ -72,7 +78,8 @@ class Manager(BaseModel):
                         {"oid": owner_id, "oid_str": str(owner_id)}
                     ).mappings().all()
                     for oh in o_hostels:
-                        assigned.add(str(oh["id"]))
+                        if is_valid_uuid(oh["id"]):
+                            assigned.add(str(oh["id"]).strip())
         except Exception:
             pass
 
@@ -83,11 +90,12 @@ class Manager(BaseModel):
                     text("SELECT id FROM hostels WHERE status = 'ACTIVE' or status = 'active' LIMIT 10")
                 ).mappings().all()
                 for ah in active_h:
-                    assigned.add(str(ah["id"]))
+                    if is_valid_uuid(ah["id"]):
+                        assigned.add(str(ah["id"]).strip())
             except Exception:
                 pass
 
-        return list(assigned)
+        return filter_valid_uuid_strs(assigned)
 
     def has_hostel_access(self, hostel_id) -> bool:
         """Check if manager is actively assigned to or authorized for the given hostel."""

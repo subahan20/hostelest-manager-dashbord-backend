@@ -67,18 +67,21 @@ class DashboardService:
                 "recent_payments": [],
             }, None, 200
 
-        # 1. Rooms Overview
-        rooms_query = Room.query.filter(Room.hostel_id.in_(hostel_ids))
-        total_rooms = rooms_query.count()
-        occupied_rooms = rooms_query.filter(Room.status == RoomStatus.OCCUPIED).count()
-        available_rooms = rooms_query.filter(Room.status == RoomStatus.AVAILABLE).count()
-        maintenance_rooms = rooms_query.filter(Room.status == RoomStatus.MAINTENANCE).count()
-        partially_occupied_rooms = rooms_query.filter(Room.status == RoomStatus.PARTIALLY_OCCUPIED).count()
+        # 1. Rooms Overview — use independent queries (never mutate a shared query after count())
+        base_room_filter = Room.hostel_id.in_(hostel_ids)
+        total_rooms = Room.query.filter(base_room_filter).count()
+        occupied_rooms = Room.query.filter(base_room_filter, Room.status == RoomStatus.OCCUPIED).count()
+        available_rooms = Room.query.filter(base_room_filter, Room.status == RoomStatus.AVAILABLE).count()
+        maintenance_rooms = Room.query.filter(base_room_filter, Room.status == RoomStatus.MAINTENANCE).count()
+        partially_occupied_rooms = Room.query.filter(
+            base_room_filter, Room.status == RoomStatus.PARTIALLY_OCCUPIED
+        ).count()
 
         # Calculate total bed capacity for precise occupancy rate
         total_capacity = db.session.query(
             func.coalesce(func.sum(Room.capacity), 0)
-        ).filter(Room.hostel_id.in_(hostel_ids)).scalar()
+        ).filter(base_room_filter).scalar() or 0
+        total_capacity = float(total_capacity)
 
         # 2. Students Count
         total_students = Student.query.filter(
@@ -87,12 +90,15 @@ class DashboardService:
         ).count()
 
         # Occupancy Rate (percentage of bed capacity filled or room percentage)
-        if total_capacity and total_capacity > 0:
-            occupancy_rate = round((total_students / total_capacity) * 100, 2)
+        # Always emit a plain float so JSON serialization never fails.
+        if total_capacity > 0:
+            occupancy_rate = float(round((total_students / total_capacity) * 100, 2))
         elif total_rooms > 0:
-            occupancy_rate = round(
-                ((occupied_rooms + 0.5 * partially_occupied_rooms) / total_rooms) * 100,
-                2,
+            occupancy_rate = float(
+                round(
+                    ((occupied_rooms + 0.5 * partially_occupied_rooms) / total_rooms) * 100,
+                    2,
+                )
             )
         else:
             occupancy_rate = 0.0

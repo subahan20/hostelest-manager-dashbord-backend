@@ -2,6 +2,7 @@ from functools import wraps
 from typing import List, Optional, Tuple
 from flask import g, request
 from app.models import Manager
+from app.utils.ids import filter_valid_uuid_strs, normalize_uuid_str
 from app.utils.responses import error_response
 
 
@@ -11,16 +12,22 @@ def get_scoped_hostel_ids(manager: Manager, requested_hostel_id: Optional[str] =
     
     If requested_hostel_id is provided, verify manager has access.
     If no requested_hostel_id, return all actively assigned hostel IDs.
+
+    Only valid UUID hostel IDs are returned. Non-UUID values (e.g. legacy integer
+    ids stored on managers.hostel_id) must never reach GUID columns — they cause
+    PostgreSQL DataError and HTTP 500 on dashboard/rooms queries.
     
     Returns:
         (hostel_ids_list, error_message)
     """
-    assigned_ids = manager.get_assigned_hostel_ids()
+    assigned_ids = filter_valid_uuid_strs(manager.get_assigned_hostel_ids() or [])
 
     if requested_hostel_id:
-        req_id_str = str(requested_hostel_id).strip()
-        if req_id_str not in assigned_ids:
-            return [], f"Unauthorized: You do not have permission to access hostel '{req_id_str}'"
+        req_id_str = normalize_uuid_str(requested_hostel_id)
+        if not req_id_str:
+            return [], f"Unauthorized: Invalid hostel id '{requested_hostel_id}'"
+        if req_id_str not in assigned_ids and not manager.has_hostel_access(req_id_str):
+            return [], f"Unauthorized: You do not have permission to access hostel '{requested_hostel_id}'"
         return [req_id_str], None
 
     return assigned_ids, None

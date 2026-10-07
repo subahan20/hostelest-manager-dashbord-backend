@@ -1,4 +1,4 @@
-from marshmallow import Schema, fields, validate, pre_load, validates_schema, ValidationError
+from marshmallow import Schema, EXCLUDE, fields, validate, pre_load, validates_schema, ValidationError
 from app.models.room import RoomType, RoomStatus
 
 
@@ -53,7 +53,11 @@ def _normalize_room_payload(data: dict) -> dict:
 
 class CreateRoomSchema(Schema):
     """Schema for creating a new room."""
-    # String (not strict UUID) — shared DB may expose numeric hostel ids.
+    class Meta:
+        unknown = EXCLUDE
+
+    # String (not strict UUID) — shared DB / legacy rows may expose non-UUID hostel ids.
+    # Authorization still verifies manager assignment in RoomService.
     hostel_id = fields.String(
         required=True,
         validate=validate.Length(min=1, max=64),
@@ -89,6 +93,9 @@ class CreateRoomSchema(Schema):
 
 class UpdateRoomSchema(Schema):
     """Schema for updating room details."""
+    class Meta:
+        unknown = EXCLUDE
+
     room_number = fields.String(required=False, validate=validate.Length(min=1, max=50))
     floor = fields.Integer(required=False, validate=validate.Range(min=0, max=100))
     room_type = fields.String(required=False, validate=validate.OneOf(RoomType.ALL_TYPES))
