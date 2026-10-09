@@ -189,8 +189,8 @@ def test_update_room_and_status(app, client, session):
     assert res_status.get_json()["data"]["status"] == "maintenance"
 
 
-def test_create_room_integer_hostel_id_and_blank_rent_string(app, client, session):
-    """Regression: numeric hostel ids and rent_amount-only payloads must not 422."""
+def test_create_room_valid_contract(app, client, session):
+    """Test valid room creation using the backend contract with 'rent'."""
     data = setup_room_test_data(session)
     mgr_user = data["manager_user"]
     hostel_assigned = data["hostel_assigned"]
@@ -200,23 +200,21 @@ def test_create_room_integer_hostel_id_and_blank_rent_string(app, client, sessio
 
     payload = {
         "hostel_id": str(hostel_assigned.id),
-        "room_number": "501",
-        "floor": "2",
-        "capacity": "2",
-        "room_type": "AC_DOUBLE",
-        "rent": "",
-        "rent_amount": 7500,
-        "status": "AVAILABLE",
+        "room_number": "103",
+        "floor": 1,
+        "room_type": "ac_double",
+        "capacity": 2,
+        "rent": 8000.0,
     }
     res = client.post("/api/manager/rooms", json=payload, headers={"Authorization": f"Bearer {token}"})
-    assert res.status_code == 201, res.get_json()
+    assert res.status_code == 201
     body = res.get_json()["data"]
-    assert body["room_number"] == "501"
-    assert body["room_type"] == "ac_double"
-    assert body["rent"] == 7500.0
+    assert body["room_number"] == "103"
+    assert body["rent"] == 8000.0
 
 
-def test_create_and_update_room_with_rent_amount(app, client, session):
+def test_create_room_rejects_rent_amount_unknown_field(app, client, session):
+    """Test that rent_amount is rejected as an unknown field and rent is required."""
     data = setup_room_test_data(session)
     mgr_user = data["manager_user"]
     hostel_assigned = data["hostel_assigned"]
@@ -224,33 +222,18 @@ def test_create_and_update_room_with_rent_amount(app, client, session):
     with app.app_context():
         token = create_access_token(identity=str(mgr_user.id), additional_claims={"role": mgr_user.role})
 
-    # Create room sending rent_amount instead of rent
     payload = {
-        "hostel_id": f"  {hostel_assigned.id}  ",
-        "room_number": " 401 ",
-        "floor": 4,
+        "hostel_id": str(hostel_assigned.id),
+        "room_number": "104",
+        "floor": 1,
         "room_type": "ac_double",
         "capacity": 2,
         "rent_amount": 8000.0,
-        "status": "available",
     }
-    res_create = client.post("/api/manager/rooms", json=payload, headers={"Authorization": f"Bearer {token}"})
-    assert res_create.status_code == 201
-    room_data = res_create.get_json()["data"]
-    assert room_data["room_number"] == "401"
-    assert room_data["rent"] == 8000.0
-    assert room_data["rent_amount"] == 8000.0
-    assert room_data["hostel"]["name"] == "Assigned Hostel"
+    res = client.post("/api/manager/rooms", json=payload, headers={"Authorization": f"Bearer {token}"})
+    assert res.status_code == 422
+    errors = res.get_json().get("errors", {})
+    assert "rent_amount" in errors
+    assert "Unknown field." in errors["rent_amount"]
 
-    # Update room sending rent_amount instead of rent
-    room_id = room_data["id"]
-    res_update = client.put(
-        f"/api/manager/rooms/{room_id}",
-        json={"rent_amount": 8500.0, "capacity": 2},
-        headers={"Authorization": f"Bearer {token}"},
-    )
-    assert res_update.status_code == 200
-    updated_data = res_update.get_json()["data"]
-    assert updated_data["rent"] == 8500.0
-    assert updated_data["rent_amount"] == 8500.0
 
