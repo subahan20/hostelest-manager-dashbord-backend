@@ -35,7 +35,18 @@ def setup_student_test_data(session):
         contact_phone="+919876500030",
         contact_email="stu@test.com",
     )
-    session.add(hostel_assigned)
+    hostel_unassigned = Hostel(
+        owner_id=owner.id,
+        name="Unassigned Hostel Stu",
+        address="202 Student Rd",
+        area="Kondapur",
+        city="Hyderabad",
+        state="Telangana",
+        pincode="500084",
+        contact_phone="+919876500040",
+        contact_email="unassigned_stu@test.com",
+    )
+    session.add_all([hostel_assigned, hostel_unassigned])
     session.commit()
 
     mgr_user = User(name="Manager Stu", email="mgr_stu@test.com", role=UserRole.MANAGER, is_active=True)
@@ -55,7 +66,9 @@ def setup_student_test_data(session):
     room_single = Room(hostel_id=hostel_assigned.id, room_number="101", capacity=1, rent=10000, status=RoomStatus.AVAILABLE)
     # Room with capacity 2
     room_double = Room(hostel_id=hostel_assigned.id, room_number="102", capacity=2, rent=7000, status=RoomStatus.AVAILABLE)
-    session.add_all([room_single, room_double])
+    # Room in unassigned hostel
+    room_unassigned = Room(hostel_id=hostel_unassigned.id, room_number="901", capacity=1, rent=8000, status=RoomStatus.AVAILABLE)
+    session.add_all([room_single, room_double, room_unassigned])
     session.commit()
 
     # Student 1
@@ -75,8 +88,10 @@ def setup_student_test_data(session):
         "manager_user": mgr_user,
         "manager": manager,
         "hostel": hostel_assigned,
+        "hostel_unassigned": hostel_unassigned,
         "room_single": room_single,
         "room_double": room_double,
+        "room_unassigned": room_unassigned,
         "student_1": s1,
     }
 
@@ -161,3 +176,119 @@ def test_update_student_status_checkout_frees_room(app, client, session):
     session.refresh(room_single)
     assert room_single.available_beds == 1
     assert room_single.status == RoomStatus.AVAILABLE
+
+
+def test_create_student_missing_required_fields_validation_error(app, client, session):
+    data = setup_student_test_data(session)
+    mgr_user = data["manager_user"]
+
+    with app.app_context():
+        token = create_access_token(identity=str(mgr_user.id), additional_claims={"role": mgr_user.role})
+
+    # Missing hostel_id, name, phone, joining_date
+    res = client.post(
+        "/api/manager/students",
+        json={},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert res.status_code == 422
+    res_data = res.get_json()
+    assert res_data["success"] is False
+    assert "errors" in res_data
+    assert "hostel_id" in res_data["errors"]
+    assert "name" in res_data["errors"]
+    assert "phone" in res_data["errors"]
+    assert "joining_date" in res_data["errors"]
+
+
+def test_create_student_unauthorized_hostel_forbidden(app, client, session):
+    data = setup_student_test_data(session)
+    mgr_user = data["manager_user"]
+    hostel_unassigned = data["hostel_unassigned"]
+
+    with app.app_context():
+        token = create_access_token(identity=str(mgr_user.id), additional_claims={"role": mgr_user.role})
+
+    payload = {
+        "hostel_id": str(hostel_unassigned.id),
+        "name": "Unauthorized Resident",
+        "phone": "+919876543209",
+        "joining_date": "2026-03-01",
+    }
+    res = client.post(
+        "/api/manager/students",
+        json=payload,
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert res.status_code == 403
+    assert "Access denied" in res.get_json()["message"]
+
+
+def test_create_student_with_frontend_aliases_and_empty_strings(app, client, session):
+    data = setup_student_test_data(session)
+    mgr_user = data["manager_user"]
+    hostel = data["hostel"]
+    room_double = data["room_double"]
+
+    with app.app_context():
+        token = create_access_token(identity=str(mgr_user.id), additional_claims={"role": mgr_user.role})
+
+    # Frontend form sending legacy aliases and empty strings
+    payload = {
+        "hostel_id": str(hostel.id),
+        "room_id": str(room_double.id),
+        "name": "Priya Sharma",
+        "phone": "+919876543210",
+        "email": "",  # Empty string should normalize to None
+        "dob": "2002-05-15",  # Alias for date_of_birth
+        "admission_date": "2026-03-15",  # Alias for joining_date
+        "guardian_name": "Ramesh Sharma",  # Alias for emergency_contact_name
+        "guardian_phone": "+919876543211",  # Alias for emergency_contact_phone
+        "college_or_company": "Infosys",  # Alias for college
+        "gender": "female",
+    }
+
+    res = client.post(
+        "/api/manager/students",
+        json=payload,
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert res.status_code == 201
+    res_data = res.get_json()
+    assert res_data["success"] is True
+    student = res_data["data"]
+    assert student["name"] == "Priya Sharma"
+    assert student["email"] is None
+    assert student["date_of_birth"] == "2002-05-15"
+    assert student["joining_date"] == "2026-03-15"
+    assert student["emergency_contact_name"] == "Ramesh Sharma"
+    assert student["emergency_contact_phone"] == "+919876543211"
+    assert student["college"] == "Infosys"
+    assert student["gender"] == "female"
+
+
+def test_create_student_invalid_room_for_hostel(app, client, session):
+    data = setup_student_test_data(session)
+    mgr_user = data["manager_user"]
+    hostel = data["hostel"]
+    room_unassigned = data["room_unassigned"]
+
+    with app.app_context():
+        token = create_access_token(identity=str(mgr_user.id), additional_claims={"role": mgr_user.role})
+
+    # Assigned hostel but room from another hostel
+    payload = {
+        "hostel_id": str(hostel.id),
+        "room_id": str(room_unassigned.id),
+        "name": "Invalid Room Stu",
+        "phone": "+919876543215",
+        "joining_date": "2026-03-01",
+    }
+    res = client.post(
+        "/api/manager/students",
+        json=payload,
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert res.status_code == 400
+    assert "Invalid room ID for this hostel" in res.get_json()["message"]
+

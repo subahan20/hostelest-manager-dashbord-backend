@@ -87,3 +87,38 @@ def manager_required(fn):
         return fn(*args, **kwargs)
 
     return wrapper
+
+
+def super_admin_required(fn):
+    """
+    Decorator enforcing:
+    1. Valid JWT token (returns 401 if missing/invalid)
+    2. User exists & is active (returns 401 if missing, 403 if disabled)
+    3. Role is super_admin (returns 403 if unauthorized)
+    
+    Attaches user to g.current_user.
+    """
+    @wraps(fn)
+    def wrapper(*args, **kwargs):
+        verify_jwt_in_request()
+        user_id = get_jwt_identity()
+        user = db.session.get(User, user_id)
+
+        if not user:
+            return error_response(message="User not found", status_code=401)
+
+        if not user.is_active:
+            return error_response(message="Account is disabled", status_code=403)
+
+        role_str = str(user.role or "").lower()
+        if role_str != UserRole.SUPER_ADMIN:
+            return error_response(
+                message="Forbidden - Super Admin access required",
+                status_code=403,
+            )
+
+        g.current_user = user
+        return fn(*args, **kwargs)
+
+    return wrapper
+
